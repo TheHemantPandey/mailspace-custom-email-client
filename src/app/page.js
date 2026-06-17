@@ -1,302 +1,214 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { 
-  Inbox, Send, File, Trash2, Archive, Star, 
-  RefreshCw, Search, Mail, Clock, Plus, X, AlertCircle
-} from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { User } from 'lucide-react';
+import Sidebar from '@/components/Sidebar';
+import EmailList from '@/components/EmailList';
+import ReadingPane from '@/components/ReadingPane';
+import ComposeModal from '@/components/ComposeModal';
+
+// Brand Icons
+const GithubIcon = ({ size = 18 }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.2c3-.3 6-1.5 6-6.5a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 5 3 6.2 6 6.5a4.8 4.8 0 0 0-1 3.2v4"></path></svg>
+);
+
+const LinkedinIcon = ({ size = 18 }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg>
+);
 
 export default function Dashboard() {
+  // Application Data State
   const [emails, setEmails] = useState([]);
   const [selectedEmail, setSelectedEmail] = useState(null);
+  const [currentFolder, setCurrentFolder] = useState('INBOX');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  
+  // UI Loading Flags
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  
-  // Compose Modal States
-  const [isComposeOpen, setIsComposeOpen] = useState(false);
-  const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
-  const [isSending, setIsSending] = useState(false);
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
 
-  const fetchEmails = async () => {
-    setIsLoading(true);
+  // Compose / Form States
+  const [isComposeOpen, setIsComposeOpen] = useState(false);
+  const [showCcBcc, setShowCcBcc] = useState(false);
+  const [composeData, setComposeData] = useState({ fromPrefix: 'hello', to: '', cc: '', bcc: '', subject: '', attachments: [] });
+  const [isSending, setIsSending] = useState(false);
+  const editorRef = useRef(null);
+
+  // Autocomplete Memory States
+  const [recentContacts, setRecentContacts] = useState([]);
+  const [recentSenders, setRecentSenders] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showSenderSuggestions, setShowSenderSuggestions] = useState(false);
+
+  // Initialize Memory from LocalStorage
+  useEffect(() => {
+    const cachedContacts = localStorage.getItem('mailspace_contacts');
+    if (cachedContacts) setRecentContacts(JSON.parse(cachedContacts));
+    const cachedSenders = localStorage.getItem('mailspace_senders');
+    if (cachedSenders) setRecentSenders(JSON.parse(cachedSenders));
+    else setRecentSenders(['hello', 'contact', 'query']);
+  }, []);
+
+  // Fetch emails when folder changes
+  useEffect(() => {
+    fetchEmails(1, currentFolder, true);
+  }, [currentFolder]);
+
+  // Data Fetching Logic
+  const fetchEmails = async (pageNum = 1, folder = 'INBOX', reset = false) => {
+    if (reset) setIsLoading(true);
     try {
-      const res = await fetch('/api/emails?label=INBOX');
+      const res = await fetch(`/api/emails?label=${folder}&page=${pageNum}&limit=30`);
       const data = await res.json();
       if (data.success) {
-        setEmails(data.emails);
-        if (data.emails.length > 0 && !selectedEmail) {
-          setSelectedEmail(data.emails[0]);
+        if (reset) {
+          setEmails(data.emails);
+          setSelectedIds(new Set());
+          if (data.emails.length > 0) setSelectedEmail(data.emails[0]);
+          else setSelectedEmail(null);
+        } else {
+          setEmails(prev => [...prev, ...data.emails]);
         }
+        setHasMore(data.pagination.hasMore);
+        setPage(pageNum);
       }
-    } catch (error) {
-      console.error("Failed to fetch emails", error);
-    }
-    setIsLoading(false);
+    } catch (error) { console.error("Failed to fetch emails", error); }
+    if (reset) setIsLoading(false);
   };
-
-  useEffect(() => {
-    fetchEmails();
-  }, []);
 
   const handleSync = async () => {
     setIsSyncing(true);
-    try {
-      await fetch('/api/sync');
-      await fetchEmails();
-    } catch (error) {
-      console.error("Sync failed", error);
-    }
+    await fetch('/api/sync');
+    await fetchEmails(1, currentFolder, true);
     setIsSyncing(false);
+  };
+
+  const handleSelectEmail = async (email) => {
+    setSelectedEmail(email);
+    if (!email.isRead) {
+      setEmails(emails.map(e => e.gmailId === email.gmailId ? { ...e, isRead: true } : e));
+      fetch('/api/emails/mark-read', { method: 'POST', body: JSON.stringify({ gmailId: email.gmailId }) });
+    }
+  };
+
+  // Action Logic
+  const handleBulkAction = async (action) => {
+    if (selectedIds.size === 0) return;
+    setBulkActionLoading(true);
+    const idsArray = Array.from(selectedIds);
+    setEmails(prev => prev.filter(e => !selectedIds.has(e.gmailId)));
+    if (selectedEmail && selectedIds.has(selectedEmail.gmailId)) setSelectedEmail(null);
+    setSelectedIds(new Set());
+
+    await fetch('/api/emails/bulk', { method: 'POST', body: JSON.stringify({ gmailIds: idsArray, action }) });
+    setBulkActionLoading(false);
+  };
+
+  const handleReply = () => {
+    if (!selectedEmail) return;
+    const sender = selectedEmail.from.address;
+    const subject = selectedEmail.subject.startsWith('Re:') ? selectedEmail.subject : `Re: ${selectedEmail.subject}`;
+    
+    setComposeData({ fromPrefix: 'hello', to: sender, cc: '', bcc: '', subject: subject, attachments: [] });
+    setIsComposeOpen(true);
+    
+    setTimeout(() => {
+      if (editorRef.current) {
+        const dateStr = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric' }).format(new Date(selectedEmail.dateReceived));
+        editorRef.current.innerHTML = `<br/><br/><blockquote style="border-left: 2px solid #3b82f6; padding-left: 10px; color: #94a3b8; margin-left: 0;">On ${dateStr}, ${selectedEmail.from.name || sender} wrote:<br/>${selectedEmail.bodyHtml || selectedEmail.bodyText.replace(/\n/g, '<br/>')}</blockquote>`;
+        editorRef.current.focus();
+      }
+    }, 100);
   };
 
   const handleSendEmail = async (e) => {
     e.preventDefault();
     setIsSending(true);
-    try {
-      const res = await fetch('/api/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(composeData),
-      });
-      
-      if (res.ok) {
-        setIsComposeOpen(false);
-        setComposeData({ to: '', subject: '', body: '' }); // Reset form
-        alert('Email sent successfully!');
-      } else {
-        alert('Failed to send email. Check console.');
+    const fromPrefixClean = composeData.fromPrefix.toLowerCase().trim();
+    const toAddressClean = composeData.to.toLowerCase().trim();
+    
+    const payload = {
+      fromAddress: `${fromPrefixClean}@hemantpandey.in`,
+      to: toAddressClean, cc: composeData.cc, bcc: composeData.bcc,
+      subject: composeData.subject, bodyHtml: editorRef.current.innerHTML,
+      attachments: composeData.attachments.map(({ filename, content }) => ({ filename, content }))
+    };
+
+    const res = await fetch('/api/send', { method: 'POST', body: JSON.stringify(payload) });
+    if (res.ok) {
+      if (!recentContacts.includes(toAddressClean)) {
+        const newC = [...recentContacts, toAddressClean];
+        setRecentContacts(newC); localStorage.setItem('mailspace_contacts', JSON.stringify(newC));
       }
-    } catch (error) {
-      console.error('Send error:', error);
-    }
+      setIsComposeOpen(false);
+      setComposeData({ fromPrefix: 'hello', to: '', cc: '', bcc: '', subject: '', attachments: [] });
+      alert('Email sent successfully!');
+    } else alert('Failed to send email.');
     setIsSending(false);
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return new Intl.DateTimeFormat('en-US', { 
-      month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric' 
-    }).format(date);
+  // Helper bindings for compose
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    const parsedFiles = await Promise.all(files.map(async (file) => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve({ filename: file.name, content: reader.result.split(',')[1], size: (file.size / 1024 / 1024).toFixed(2) });
+      });
+    }));
+    setComposeData(prev => ({ ...prev, attachments: [...prev.attachments, ...parsedFiles] }));
   };
+  const removeAttachment = (idxToRemove) => setComposeData(prev => ({...prev, attachments: prev.attachments.filter((_, i) => i !== idxToRemove)}));
+  const applyFormat = (command) => { document.execCommand(command, false, null); editorRef.current.focus(); };
+
+  const filteredContacts = recentContacts.filter(contact => contact.toLowerCase().includes(composeData.to.toLowerCase().trim()));
+  const filteredSenders = recentSenders.filter(sender => sender.toLowerCase().includes(composeData.fromPrefix.toLowerCase().trim()));
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-300 font-sans relative">
-      
-      {/* 1. LEFT SIDEBAR */}
-      <aside className="w-64 border-r border-slate-800 bg-slate-950/50 flex flex-col">
-        <div className="h-16 flex items-center px-6 border-b border-slate-800">
-          <Mail className="w-6 h-6 text-blue-500 mr-3" />
-          <span className="text-lg font-bold text-slate-100 tracking-wide">Mailspace</span>
+    <div className="flex flex-col h-screen overflow-hidden bg-slate-950 text-slate-300 font-sans">
+      {/* HEADER */}
+      <header className="h-14 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between px-6 z-30 shrink-0 shadow-md">
+        <div className="flex items-center">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-900/20 mr-3 overflow-hidden border border-slate-700">
+            <User size={18} className="text-white" />
+          </div>
+          <div><h1 className="text-sm font-bold text-slate-100 flex items-center">Hemant Pandey <span className="ml-2 px-2 py-0.5 rounded text-[10px] bg-blue-900/30 text-blue-400 border border-blue-800/50">Workspace</span></h1></div>
         </div>
+        <div className="flex items-center space-x-3">
+          <a href="https://github.com" target="_blank" className="p-1.5 text-slate-400 hover:text-white transition-all"><GithubIcon size={18} /></a>
+          <a href="https://linkedin.com" target="_blank" className="p-1.5 text-slate-400 hover:text-blue-400 transition-all"><LinkedinIcon size={18} /></a>
+        </div>
+      </header>
+
+      {/* DASHBOARD LAYOUT */}
+      <div className="flex flex-1 overflow-hidden relative">
+        <Sidebar 
+          currentFolder={currentFolder} setCurrentFolder={setCurrentFolder}
+          setIsComposeOpen={setIsComposeOpen} handleSync={handleSync} isSyncing={isSyncing} 
+        />
+        <EmailList 
+          emails={emails} isLoading={isLoading} page={page} hasMore={hasMore} currentFolder={currentFolder}
+          selectedEmail={selectedEmail} handleSelectEmail={handleSelectEmail} fetchEmails={fetchEmails}
+          selectedIds={selectedIds} setSelectedIds={setSelectedIds} handleBulkAction={handleBulkAction} bulkActionLoading={bulkActionLoading}
+        />
+        <ReadingPane 
+          selectedEmail={selectedEmail} handleReply={handleReply} handleBulkAction={handleBulkAction} setSelectedIds={setSelectedIds} 
+        />
         
-        <div className="p-4 flex-1 overflow-y-auto">
-          {/* New Compose Button */}
-          <button 
-            onClick={() => setIsComposeOpen(true)}
-            className="w-full mb-4 bg-blue-600 hover:bg-blue-500 text-white py-3 px-4 rounded-xl flex items-center justify-center font-semibold shadow-lg shadow-blue-900/20 transition-all"
-          >
-            <Plus className="w-5 h-5 mr-2" />
-            Compose
-          </button>
-
-          <button 
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="w-full mb-6 border border-slate-700 hover:bg-slate-800 text-slate-300 py-2.5 px-4 rounded-lg flex items-center justify-center font-medium transition-all disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin text-blue-400' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync Inbox'}
-          </button>
-
-          <nav className="space-y-1">
-            <NavItem icon={<Inbox size={18} />} label="Inbox" count={emails.length} active />
-            <NavItem icon={<Star size={18} />} label="Starred" />
-            <NavItem icon={<Send size={18} />} label="Sent" />
-            <NavItem icon={<File size={18} />} label="Drafts" />
-            <NavItem icon={<Archive size={18} />} label="Archive" />
-            <NavItem icon={<Trash2 size={18} />} label="Trash" />
-          </nav>
-        </div>
-      </aside>
-
-      {/* 2. MIDDLE PANE: EMAIL LIST */}
-      <section className="w-80 lg:w-96 border-r border-slate-800 bg-slate-900 flex flex-col relative z-10 shadow-2xl shadow-black/50">
-        <div className="h-16 flex items-center px-4 border-b border-slate-800 bg-slate-900">
-          <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input 
-              type="text" 
-              placeholder="Search emails..." 
-              className="w-full bg-slate-950 border border-slate-800 text-sm rounded-md pl-9 pr-4 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-          {isLoading ? (
-            <div className="p-8 text-center text-slate-500 text-sm flex flex-col items-center">
-              <RefreshCw className="w-6 h-6 animate-spin mb-3 text-slate-600" />
-              Loading your inbox...
-            </div>
-          ) : emails.length === 0 ? (
-            <div className="p-8 text-center text-slate-500 text-sm">
-              Your inbox is empty. Click sync to fetch!
-            </div>
-          ) : (
-            emails.map((email) => (
-              <div 
-                key={email.gmailId}
-                onClick={() => setSelectedEmail(email)}
-                className={`p-4 border-b border-slate-800/50 cursor-pointer transition-all hover:bg-slate-800/50 ${selectedEmail?.gmailId === email.gmailId ? 'bg-blue-900/20 border-l-2 border-l-blue-500' : 'border-l-2 border-l-transparent'}`}
-              >
-                <div className="flex justify-between items-baseline mb-1">
-                  <h4 className={`text-sm font-medium truncate pr-4 ${!email.isRead ? 'text-slate-100' : 'text-slate-400'}`}>
-                    {email.from.name || email.from.address.split('@')[0]}
-                  </h4>
-                  <span className="text-xs text-slate-500 whitespace-nowrap">
-                    {formatDate(email.dateReceived)}
-                  </span>
-                </div>
-                <h5 className={`text-sm mb-1 truncate ${!email.isRead ? 'text-blue-400 font-medium' : 'text-slate-300'}`}>
-                  {email.subject}
-                </h5>
-                <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
-                  {email.snippet}
-                </p>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-      {/* 3. RIGHT PANE: READING VIEW */}
-      <main className="flex-1 bg-slate-950 flex flex-col relative z-0">
-        {selectedEmail ? (
-          <>
-            <div className="h-16 flex items-center justify-between px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-              <div className="flex space-x-3">
-                <button className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-slate-200 transition-colors tooltip" title="Archive"><Archive size={18} /></button>
-                <button className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-slate-200 transition-colors tooltip" title="Delete"><Trash2 size={18} /></button>
-              </div>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-              <div className="max-w-4xl mx-auto">
-                <h1 className="text-2xl font-semibold text-slate-100 mb-6 tracking-tight">
-                  {selectedEmail.subject}
-                </h1>
-                
-                <div className="flex items-center justify-between mb-8 pb-6 border-b border-slate-800/80">
-                  <div className="flex items-center">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-900/20 mr-4">
-                      {(selectedEmail.from.name || selectedEmail.from.address).charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-slate-200">
-                        {selectedEmail.from.name} <span className="text-slate-500 font-normal ml-1">&lt;{selectedEmail.from.address}&gt;</span>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-0.5 flex items-center">
-                        To: {selectedEmail.to.map(t => t.name || t.address).join(', ') || 'me'}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-500 flex items-center bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800">
-                    <Clock size={12} className="mr-1.5" />
-                    {formatDate(selectedEmail.dateReceived)}
-                  </div>
-                </div>
-
-                <div 
-                  className="prose prose-invert prose-blue max-w-none text-slate-300 text-sm leading-relaxed"
-                  dangerouslySetInnerHTML={{ __html: selectedEmail.bodyHtml || selectedEmail.bodyText.replace(/\n/g, '<br />') }}
-                />
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
-            <Mail className="w-16 h-16 text-slate-800 mb-4" />
-            <p>Select a message to read</p>
-          </div>
+        {isComposeOpen && (
+          <ComposeModal 
+            setIsComposeOpen={setIsComposeOpen} composeData={composeData} setComposeData={setComposeData}
+            showSenderSuggestions={showSenderSuggestions} setShowSenderSuggestions={setShowSenderSuggestions} filteredSenders={filteredSenders}
+            showSuggestions={showSuggestions} setShowSuggestions={setShowSuggestions} filteredContacts={filteredContacts}
+            showCcBcc={showCcBcc} setShowCcBcc={setShowCcBcc} handleFileUpload={handleFileUpload} removeAttachment={removeAttachment}
+            applyFormat={applyFormat} handleSendEmail={handleSendEmail} isSending={isSending} editorRef={editorRef}
+          />
         )}
-      </main>
-
-      {/* 4. COMPOSE MODAL OVERLAY */}
-      {isComposeOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-end p-6 bg-black/40 backdrop-blur-sm transition-opacity">
-          <div className="bg-slate-900 w-full max-w-xl rounded-t-xl rounded-bl-xl shadow-2xl border border-slate-700 flex flex-col overflow-hidden animate-in slide-in-from-bottom-10">
-            
-            {/* Modal Header */}
-            <div className="bg-slate-800 px-4 py-3 flex justify-between items-center border-b border-slate-700">
-              <span className="text-sm font-semibold text-slate-200">New Message</span>
-              <button onClick={() => setIsComposeOpen(false)} className="text-slate-400 hover:text-slate-100 transition-colors">
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Modal Form */}
-            <form onSubmit={handleSendEmail} className="flex flex-col flex-1">
-              <input 
-                type="email" 
-                required
-                placeholder="To (Must be your verified email while testing)" 
-                value={composeData.to}
-                onChange={(e) => setComposeData({...composeData, to: e.target.value})}
-                className="w-full bg-transparent border-b border-slate-800 px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:bg-slate-950/50"
-              />
-              <input 
-                type="text" 
-                placeholder="Subject" 
-                value={composeData.subject}
-                onChange={(e) => setComposeData({...composeData, subject: e.target.value})}
-                className="w-full bg-transparent border-b border-slate-800 px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:bg-slate-950/50"
-              />
-              <textarea 
-                required
-                placeholder="Write your message..." 
-                value={composeData.body}
-                onChange={(e) => setComposeData({...composeData, body: e.target.value})}
-                className="w-full flex-1 bg-transparent px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none resize-none min-h-[250px]"
-              />
-              
-              {/* Modal Footer */}
-              <div className="bg-slate-950/50 px-4 py-3 flex justify-between items-center border-t border-slate-800">
-                <button 
-                  type="submit" 
-                  disabled={isSending}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-md text-sm font-medium transition-colors flex items-center disabled:opacity-50"
-                >
-                  {isSending ? 'Sending...' : 'Send'}
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setIsComposeOpen(false)}
-                  className="text-slate-500 hover:text-red-400 transition-colors p-2"
-                  title="Discard Draft"
-                >
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NavItem({ icon, label, count, active }) {
-  return (
-    <button className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-all ${active ? 'bg-blue-600/10 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}>
-      <div className="flex items-center">
-        <span className="mr-3">{icon}</span>
-        <span className="text-sm">{label}</span>
       </div>
-      {count !== undefined && count > 0 && (
-        <span className={`text-xs px-2 py-0.5 rounded-full ${active ? 'bg-blue-600/20 text-blue-400' : 'bg-slate-800 text-slate-400'}`}>
-          {count}
-        </span>
-      )}
-    </button>
+    </div>
   );
 }
