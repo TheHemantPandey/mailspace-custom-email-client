@@ -38,6 +38,7 @@ export const authOptions = {
     },
     async session({ session, token }) {
       session.accessToken = token.accessToken;
+      session.refreshToken = token.refreshToken;
       return session;
     },
   },

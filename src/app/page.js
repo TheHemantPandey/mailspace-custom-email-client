@@ -25,10 +25,11 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   
-  // UI Loading Flags
+  // UI Loading & Error Flags
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
 
   // Compose / Form States
   const [isComposeOpen, setIsComposeOpen] = useState(false);
@@ -81,7 +82,22 @@ export default function Dashboard() {
 
   const handleSync = async () => {
     setIsSyncing(true);
-    await fetch('/api/sync');
+    try {
+      const res = await fetch('/api/sync');
+      const data = await res.json();
+      if (!res.ok || !data.success || data.authError) {
+        if (data.authError || data.error?.includes('Authorization Error') || data.error?.includes('invalid_grant')) {
+          setAuthError(data.error || 'Gmail API Authorization Error: Unable to sync or retrieve emails from Gmail API');
+        } else {
+          setAuthError(data.error || 'Sync request returned an error');
+        }
+      } else {
+        setAuthError(null);
+      }
+    } catch (err) {
+      console.error("Sync request error:", err);
+      setAuthError('Network error while connecting to sync API');
+    }
     await fetchEmails(1, currentFolder, true);
     setIsSyncing(false);
   };
@@ -194,6 +210,7 @@ export default function Dashboard() {
           emails={emails} isLoading={isLoading} page={page} hasMore={hasMore} currentFolder={currentFolder}
           selectedEmail={selectedEmail} handleSelectEmail={handleSelectEmail} fetchEmails={fetchEmails}
           selectedIds={selectedIds} setSelectedIds={setSelectedIds} handleBulkAction={handleBulkAction} bulkActionLoading={bulkActionLoading}
+          authError={authError} setAuthError={setAuthError} handleSync={handleSync}
         />
         <ReadingPane 
           selectedEmail={selectedEmail} handleReply={handleReply} handleBulkAction={handleBulkAction} setSelectedIds={setSelectedIds} 

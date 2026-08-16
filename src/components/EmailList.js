@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Search, CheckSquare, Square, Archive, Trash2, RefreshCw, Paperclip } from 'lucide-react';
+import { Search, CheckSquare, Square, Archive, Trash2, RefreshCw, Paperclip, AlertTriangle } from 'lucide-react';
+import { signIn } from 'next-auth/react';
 
 export default function EmailList({
   emails,
@@ -13,7 +14,10 @@ export default function EmailList({
   selectedIds,
   setSelectedIds,
   handleBulkAction,
-  bulkActionLoading
+  bulkActionLoading,
+  authError,
+  setAuthError,
+  handleSync
 }) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -85,7 +89,47 @@ export default function EmailList({
         )}
       </div>
 
-      {/* 3. SCROLLABLE EMAIL LIST */}
+      {/* 3. ERROR BANNER (FOR GMAIL API AUTH FAILURE) */}
+      {authError && (
+        <div className="mx-3 my-3 p-3 bg-red-950/80 border border-red-800/80 rounded-lg flex flex-col gap-2 shrink-0 text-red-200 text-xs shadow-lg">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center font-semibold text-red-300">
+              <AlertTriangle size={15} className="mr-1.5 shrink-0 text-red-400" />
+              <span>Gmail API Authorization Error</span>
+            </div>
+            {setAuthError && (
+              <button 
+                onClick={() => setAuthError(null)} 
+                className="text-red-400 hover:text-red-200 text-xs px-1"
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-red-300/90 leading-normal">
+            Unable to sync or retrieve emails from Gmail API (invalid/expired refresh token or missing scopes). Displaying cached MongoDB emails.
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={() => signIn('google', { callbackUrl: window.location.href })}
+              className="px-2 py-1 bg-red-600 hover:bg-red-500 text-white font-medium text-[11px] rounded transition-colors shadow"
+            >
+              Re-authorize Gmail
+            </button>
+            {handleSync && (
+              <button
+                onClick={handleSync}
+                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-[11px] rounded transition-colors border border-slate-700"
+              >
+                Retry Sync
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 4. SCROLLABLE EMAIL LIST */}
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         {isLoading && page === 1 ? (
           <div className="p-8 text-center text-slate-500 text-sm flex flex-col items-center">
@@ -121,7 +165,7 @@ export default function EmailList({
               </div>
             ))}
             
-            {/* 4. PAGINATION LOAD MORE BUTTON */}
+            {/* PAGINATION LOAD MORE BUTTON */}
             {hasMore && !searchQuery && (
               <button 
                 onClick={() => fetchEmails(page + 1, currentFolder, false)} 

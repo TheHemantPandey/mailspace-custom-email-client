@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { MongoClient } from 'mongodb';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request) {
   const client = new MongoClient(process.env.MONGODB_URI);
 
@@ -17,18 +19,36 @@ export async function GET(request) {
     await client.connect();
     const db = client.db('maildb');
 
-    // 3. Build the smart query (Google uses 'SENT', 'TRASH', 'STARRED', 'DRAFT')
-    const query = label === 'ALL' ? {} : { labelIds: label };
+    // 3. Build robust query to handle labelIds / labels or missing fields
+    let query = {};
+    if (label === 'ALL') {
+      query = {};
+    } else if (label === 'INBOX') {
+      query = {
+        $or: [
+          { labelIds: 'INBOX' },
+          { labels: 'INBOX' },
+          { labelIds: { $exists: false } },
+          { labelIds: null },
+          { labelIds: { $size: 0 } },
+        ],
+      };
+    } else {
+      query = {
+        $or: [{ labelIds: label }, { labels: label }],
+      };
+    }
 
-    // 4. Fetch the exact batch of emails requested, newest first
-    const emails = await db.collection('emails')
+    // 4. Fetch the exact batch of cached emails requested from MongoDB, newest first
+    const emails = await db
+      .collection('emails')
       .find(query)
       .sort({ dateReceived: -1 })
       .skip(skip)
       .limit(limit)
       .toArray();
 
-    // 5. Count the total emails in this folder so the frontend knows when to hide the "Load More" button
+    // 5. Count total emails matching query
     const totalCount = await db.collection('emails').countDocuments(query);
 
     return NextResponse.json({
@@ -36,19 +56,18 @@ export async function GET(request) {
       emails,
       pagination: {
         currentPage: page,
-        totalPages: Math.ceil(totalCount / limit),
+        totalPages: Math.ceil(totalCount / limit) || 1,
         totalItems: totalCount,
-        hasMore: skip + emails.length < totalCount
-      }
+        hasMore: skip + emails.length < totalCount,
+      },
     });
-
   } catch (error) {
     console.error('❌ Database fetch error:', error);
     return NextResponse.json(
-      { success: false, message: 'Failed to fetch emails', error: error.message },
+      { success: false, message: 'Failed to fetch cached emails from database', error: error.message },
       { status: 500 }
     );
   } finally {
-    await client.close();
+    await client.close().catch(() => {});
   }
 }
