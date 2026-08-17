@@ -1,6 +1,11 @@
 import NextAuth from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 
+export const ALLOWED_EMAILS = [
+  'hement.pandey2121@gmail.com',
+  'hellohemantpandey@gmail.com',
+];
+
 export const authOptions = {
   providers: [
     GoogleProvider({
@@ -8,10 +13,9 @@ export const authOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       authorization: {
         params: {
-          // Forces Google to provide a long-term refresh token during user login
-          access_type: 'offline',
           prompt: 'consent',
-          // Requests permission to authenticate the user and gain read/write sync access to Gmail
+          access_type: 'offline',
+          response_type: 'code',
           scope: 'openid email profile https://mail.google.com/',
         },
       },
@@ -19,24 +23,33 @@ export const authOptions = {
   ],
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
-    // Security check: Only lets YOU access the dashboard system
-    async signIn({ user }) {
-      const allowedEmail = 'hellohemantpandey@gmail.com';
-      if (user.email === allowedEmail) {
+    // Security check: Only lets authorized whitelisted users access the system
+    async signIn({ user, profile }) {
+      const email = (user?.email || profile?.email || '').toLowerCase().trim();
+      if (ALLOWED_EMAILS.includes(email)) {
         return true; // Access granted
       }
-      console.warn(`🛑 Unauthorized login attempt blocked for: ${user.email}`);
+      console.warn(`🛑 Unauthorized login attempt blocked for: ${email}`);
       return false; // Access denied instantly
     },
     // Appends profile information and tokens straight into your dashboard session object
-    async jwt({ token, account }) {
+    async jwt({ token, account, user }) {
       if (account) {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
       }
+      if (user?.email) {
+        token.email = user.email.toLowerCase().trim();
+      }
       return token;
     },
     async session({ session, token }) {
+      const sessionEmail = (session.user?.email || token.email || '').toLowerCase().trim();
+      if (session.user && !ALLOWED_EMAILS.includes(sessionEmail)) {
+        console.warn(`🛑 Invalid session detected for: ${sessionEmail}`);
+        session.user = null;
+        return session;
+      }
       session.accessToken = token.accessToken;
       session.refreshToken = token.refreshToken;
       return session;
