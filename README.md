@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📬 Mail Dashboard — Personal Email Workspace
+# 📬 mailspace-custom-email-client
 
 **A full-stack, dark-themed Gmail & Custom Domain Email Client built with Next.js 16, MongoDB, Google OAuth2, and Resend.**
 
