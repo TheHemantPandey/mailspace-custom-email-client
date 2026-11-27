@@ -63,11 +63,9 @@ flowchart LR
 
 ## 📸 Screenshots
 
-> **Note:** Upload your screenshots to `docs/screenshots/` with the filenames below to display them automatically.
-
 | Inbox & Reading Pane | Rich-Text Compose Modal |
 | :---: | :---: |
-| ![Inbox Dashboard](docs/screenshots/dashboard.png) | ![Compose Modal](docs/screenshots/compose.png) |
+| ![Inbox Dashboard](docs/screenshots/dashboard.jpg) | ![Compose Modal](docs/screenshots/compose.jpg) |
 
 ---
 
